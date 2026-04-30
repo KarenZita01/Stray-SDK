@@ -1,7 +1,10 @@
 """Configuration management for Stellar Agent."""
+import logging
 import os
 from typing import Optional
 from dotenv import load_dotenv
+from .exceptions import ConfigurationError
+from .utils.validators import is_valid_stellar_secret
 
 # Load environment variables from .env file
 load_dotenv()
@@ -24,30 +27,41 @@ class Config:
     
     def validate(self) -> bool:
         """Validate that required configuration is present."""
-        if not self.source_secret:
-            raise ValueError("SOURCE_SECRET is required in environment variables")
+        logger = logging.getLogger(__name__)
         
-        # Validate SOURCE_SECRET format
-        if len(self.source_secret) != 56 or not self.source_secret.startswith('S'):
-            raise ValueError("SOURCE_SECRET must be a valid Stellar secret key (56 characters starting with 'S')")
+        if not self.source_secret:
+            logger.error("SOURCE_SECRET is missing from environment variables")
+            raise ConfigurationError("SOURCE_SECRET is required in environment variables")
+        
+        # Validate SOURCE_SECRET format using validator
+        if not is_valid_stellar_secret(self.source_secret):
+            logger.error(f"Invalid SOURCE_SECRET format: {self.source_secret[:10]}...")
+            raise ConfigurationError("SOURCE_SECRET must be a valid Stellar secret key (56 characters starting with 'S')")
         
         # Validate network settings
         if not self.horizon_url:
-            raise ValueError("HORIZON_URL cannot be empty")
+            logger.error("HORIZON_URL is empty")
+            raise ConfigurationError("HORIZON_URL cannot be empty")
         
         if not self.network_passphrase:
-            raise ValueError("NETWORK_PASSPHRASE cannot be empty")
+            logger.error("NETWORK_PASSPHRASE is empty")
+            raise ConfigurationError("NETWORK_PASSPHRASE cannot be empty")
         
+        logger.info("Configuration validation successful")
         return True
     
     def get_source_public_key(self) -> str:
         """Get the public key corresponding to the source secret."""
+        logger = logging.getLogger(__name__)
         from stellar_sdk import Keypair
         try:
             keypair = Keypair.from_secret(self.source_secret)
-            return keypair.public_key
+            public_key = keypair.public_key
+            logger.debug(f"Successfully derived public key from secret: {public_key}")
+            return public_key
         except Exception as e:
-            raise ValueError(f"Invalid SOURCE_SECRET: {e}")
+            logger.error(f"Failed to derive public key from secret: {e}")
+            raise ConfigurationError(f"Invalid SOURCE_SECRET: {e}")
 
 # Global config instance
 config = Config()

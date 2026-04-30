@@ -2,9 +2,10 @@
 import pytest
 from unittest.mock import Mock, patch
 from decimal import Decimal
-from stellar_agent.utils.validators import is_valid_stellar_address, is_valid_amount
+from stellar_agent.utils.validators import is_valid_stellar_address, is_valid_amount, is_valid_stellar_secret, validate_amount_precision
 from stellar_agent.client import StellarClient
 from stellar_agent.config import config
+from stellar_agent.exceptions import ConfigurationError, ValidationError, InsufficientBalanceError, AccountNotFoundError
 
 class TestValidators:
     """Test validation functions."""
@@ -37,6 +38,38 @@ class TestValidators:
         """Test invalid payment amounts."""
         assert is_valid_amount(0) is False
         assert is_valid_amount(-10) is False
+        assert is_valid_amount("invalid") is False
+        assert is_valid_amount(1000001) is False  # Over 1M limit
+    
+    def test_valid_stellar_secret(self):
+        """Test valid Stellar secret key format."""
+        valid_secret = "SBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H"
+        assert is_valid_stellar_secret(valid_secret) is True
+    
+    def test_invalid_stellar_secret_wrong_prefix(self):
+        """Test secret key with wrong prefix."""
+        invalid_secret = "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H"
+        assert is_valid_stellar_secret(invalid_secret) is False
+    
+    def test_invalid_stellar_secret_wrong_length(self):
+        """Test secret key with wrong length."""
+        invalid_secret = "SBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX"
+        assert is_valid_stellar_secret(invalid_secret) is False
+    
+    def test_empty_secret(self):
+        """Test empty secret key."""
+        assert is_valid_stellar_secret("") is False
+    
+    def test_amount_precision_valid(self):
+        """Test valid amount precision."""
+        assert validate_amount_precision("10.1234567") is True  # 7 decimal places
+        assert validate_amount_precision("10") is True
+        assert validate_amount_precision("10.1") is True
+    
+    def test_amount_precision_invalid(self):
+        """Test invalid amount precision."""
+        assert validate_amount_precision("10.12345678") is False  # 8 decimal places
+        assert validate_amount_precision("invalid") is False
 
 
 class TestStellarClientBalanceChecking:
@@ -109,14 +142,14 @@ class TestConfig:
         """Test config validation fails with missing SOURCE_SECRET."""
         with patch.dict('os.environ', {'SOURCE_SECRET': ''}, clear=True):
             test_config = config.__class__()
-            with pytest.raises(ValueError, match="SOURCE_SECRET is required"):
+            with pytest.raises(ConfigurationError, match="SOURCE_SECRET is required"):
                 test_config.validate()
     
     def test_config_validation_invalid_source_secret(self):
         """Test config validation fails with invalid SOURCE_SECRET format."""
         with patch.dict('os.environ', {'SOURCE_SECRET': 'invalid_secret'}, clear=True):
             test_config = config.__class__()
-            with pytest.raises(ValueError, match="SOURCE_SECRET must be a valid Stellar secret key"):
+            with pytest.raises(ConfigurationError, match="SOURCE_SECRET must be a valid Stellar secret key"):
                 test_config.validate()
     
     @patch.dict('os.environ', {
@@ -128,3 +161,25 @@ class TestConfig:
         """Test config validation succeeds with valid values."""
         test_config = config.__class__()
         assert test_config.validate() is True
+    
+    def test_config_validation_invalid_horizon_url(self):
+        """Test config validation fails with empty HORIZON_URL."""
+        with patch.dict('os.environ', {
+            'SOURCE_SECRET': 'SBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H',
+            'HORIZON_URL': '',
+            'NETWORK_PASSPHRASE': 'Test SDF Network ; September 2015'
+        }, clear=True):
+            test_config = config.__class__()
+            with pytest.raises(ConfigurationError, match="HORIZON_URL cannot be empty"):
+                test_config.validate()
+    
+    def test_config_validation_invalid_network_passphrase(self):
+        """Test config validation fails with empty NETWORK_PASSPHRASE."""
+        with patch.dict('os.environ', {
+            'SOURCE_SECRET': 'SBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H',
+            'HORIZON_URL': 'https://horizon-testnet.stellar.org',
+            'NETWORK_PASSPHRASE': ''
+        }, clear=True):
+            test_config = config.__class__()
+            with pytest.raises(ConfigurationError, match="NETWORK_PASSPHRASE cannot be empty"):
+                test_config.validate()
